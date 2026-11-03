@@ -5655,7 +5655,12 @@ var RXC = {
   nextFd: 3,
   cache: new Map,
   cacheBytes: 0,
-  cacheLimit: 805306368,
+  // on-demand block cache cap: keep this small so the port only holds what the
+  // game recently touched instead of the whole data set (override with ?cachemb=N)
+  cacheLimit: (() => {
+    const mb = +(new URLSearchParams(location.search).get("cachemb"));
+    return (mb > 0 ? mb : 64) * 1048576;
+  })(),
   overlay: new Map,
   status: s => {
     if (Module["onStatus"]) Module["onStatus"](s); else {
@@ -6035,7 +6040,9 @@ var RXC = {
     }
   },
   async loadPreload() {
-    if (new URLSearchParams(location.search).has("nopreload")) return;
+    // lazy by default: blocks are fetched on demand via readRange(); the recorded
+    // prefetch list only runs when explicitly requested with ?preload
+    if (!new URLSearchParams(location.search).has("preload")) return;
     try {
       const r = await fetch("preload.json");
       if (!r.ok) return;
