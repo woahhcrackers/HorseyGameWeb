@@ -6074,6 +6074,15 @@ var RXC = {
       parts.push(v);
       RXC.note(rel, b);
     }
+    // sequential-read lookahead: when the game streams through a file (area loads,
+    // big assets), the next blocks are usually read within a frame or two — kick
+    // them off now so the network latency overlaps with guest processing instead
+    // of stalling the frame on each block boundary
+    const nBlocks = Math.ceil(size / B);
+    for (let b = b1 + 1; b <= Math.min(b1 + 2, nBlocks - 1); b++) {
+      RXC.note(rel, b);
+      RXC.fetchBlock(rel, b).catch(() => {});
+    }
     const assemble = blks => {
       if (b0 === b1) return blks[0].subarray(off - b0 * B, off - b0 * B + n);
       let out;
