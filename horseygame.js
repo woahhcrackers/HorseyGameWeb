@@ -167,6 +167,15 @@ function preRun() {
     if (typeof preRun == "function") preRun = [ preRun ];
     onPreRuns.push(...preRun);
   }
+  // Grow the wasm heap BEFORE the guest reserves its own memory pool, so the pool
+  // is sized off a larger heap (?mem=<MB>, default 3072; the wasm allows up to 4 GB).
+  try {
+    var memMB = +(new URLSearchParams(location.search).get("mem")) || 3072;
+    var want = memMB * 1048576;
+    if (wasmMemory && wasmMemory.buffer.byteLength < want) growMemory(want);
+  } catch (e) {
+    console.warn("[web] pre-run heap grow failed", e);
+  }
   // Begin ATPRERUNS hooks
   callRuntimeCallbacks(onPreRuns);
 }
@@ -5655,7 +5664,12 @@ var RXC = {
   nextFd: 3,
   cache: new Map,
   cacheBytes: 0,
-  cacheLimit: 805306368,
+  // on-demand block cache cap: keep this small so the port only holds what the
+  // game recently touched instead of the whole data set (override with ?cachemb=N)
+  cacheLimit: (() => {
+    const mb = +(new URLSearchParams(location.search).get("cachemb"));
+    return (mb > 0 ? mb : 64) * 1048576;
+  })(),
   overlay: new Map,
   status: s => {
     if (Module["onStatus"]) Module["onStatus"](s); else {
@@ -6035,7 +6049,9 @@ var RXC = {
     }
   },
   async loadPreload() {
-    if (new URLSearchParams(location.search).has("nopreload")) return;
+    // lazy by default: blocks are fetched on demand via readRange(); the recorded
+    // prefetch list only runs when explicitly requested with ?preload
+    if (!new URLSearchParams(location.search).has("preload")) return;
     try {
       const r = await fetch("preload.json");
       if (!r.ok) return;
@@ -6058,6 +6074,15 @@ var RXC = {
       parts.push(v);
       RXC.note(rel, b);
     }
+    // sequential-read lookahead: when the game streams through a file (area loads,
+    // big assets), the next blocks are usually read within a frame or two — kick
+    // them off now so the network latency overlaps with guest processing instead
+    // of stalling the frame on each block boundary
+    const nBlocks = Math.ceil(size / B);
+    for (let b = b1 + 1; b <= Math.min(b1 + 2, nBlocks - 1); b++) {
+      RXC.note(rel, b);
+      RXC.fetchBlock(rel, b).catch(() => {});
+    }
     const assemble = blks => {
       if (b0 === b1) return blks[0].subarray(off - b0 * B, off - b0 * B + n);
       let out;
@@ -6075,6 +6100,45 @@ var RXC = {
         done += take;
       }
       return done === n ? out : out.subarray(0, done);
+    };
+    if (!pending) return assemble(parts);
+    const tf = performance.now();
+    return Promise.all(parts).then(blks => {
+      const dt = performance.now() - tf;
+      RXC.cnt.fetchMs += dt;
+      RXC.tot.fetchMs += dt;
+      return assemble(blks);
+    });
+  },
+  // like readRange, but assembles straight into the guest heap at bufp — skips
+  // the intermediate Uint8Array allocation + full copy per multi-block read
+  readRangeInto(rel, off, n, bufp) {
+    const size = RXC.manifest[rel];
+    if (off >= size) return 0;
+    if (off + n > size) n = size - off;
+    const B = RXC.BLOCK, b0 = Math.floor(off / B), b1 = Math.floor((off + n - 1) / B);
+    const parts = [];
+    let pending = false;
+    for (let b = b0; b <= b1; b++) {
+      const v = RXC.fetchBlock(rel, b);
+      if (v instanceof Promise) pending = true;
+      parts.push(v);
+      RXC.note(rel, b);
+    }
+    const nBlocks = Math.ceil(size / B);
+    for (let b = b1 + 1; b <= Math.min(b1 + 2, nBlocks - 1); b++) {
+      RXC.note(rel, b);
+      RXC.fetchBlock(rel, b).catch(() => {});
+    }
+    const assemble = blks => {
+      let done = 0;
+      for (let i = 0; i < blks.length && done < n; i++) {
+        const s = i === 0 ? off - b0 * B : 0, take = Math.min(n - done, blks[i].length - s);
+        if (take <= 0) break;
+        HEAPU8.set(blks[i].subarray(s, s + take), bufp + done);
+        done += take;
+      }
+      return done;
     };
     if (!pending) return assemble(parts);
     const tf = performance.now();
@@ -6176,14 +6240,10 @@ function _rxc_js_file_read_nb(fd, bufp, off, n, donep, resultp) {
     HEAPU8.set(f.ov.data.subarray(off, end), bufp >>> 0);
     return end - off;
   }
-  const d = RXC.readRange(f.rel, off, n);
-  if (!(d instanceof Promise)) {
-    HEAPU8.set(d, bufp >>> 0);
-    return d.length;
-  }
-  d.then(data => {
-    HEAPU8.set(data, bufp >>> 0);
-    HEAP32[resultp >>> 2 >>> 0] = data.length;
+  const d = RXC.readRangeInto(f.rel, off, n, bufp >>> 0);
+  if (!(d instanceof Promise)) return d;
+  d.then(len => {
+    HEAP32[resultp >>> 2 >>> 0] = len;
     HEAP32[donep >>> 2 >>> 0] = 1;
   }, () => {
     HEAP32[resultp >>> 2 >>> 0] = -1;
@@ -6344,7 +6404,11 @@ function _rxc_js_gfx_mode() {
   const w = Module["gfxWorker"];
   if (!w) return 0;
   RXCG.w = w;
-  RXCG.fif = Math.max(1, +(new URLSearchParams(location.search).get("fif") || 1));
+  // default 2 frames in flight: with 1, the engine thread blocks until the gfx
+  // worker finishes every frame, so big area-load buffer uploads (hundreds of MB)
+  // stall the frame directly. 2 lets the engine run one frame ahead and smooths
+  // those hitches (override with ?fif=1)
+  RXCG.fif = Math.max(1, +(new URLSearchParams(location.search).get("fif") || 2));
   Module["__gfxmsg"] = RXCG.onmsg;
   const early = Module["__gfxEarly"] || [];
   Module["__gfxEarly"] = [];
@@ -6352,13 +6416,14 @@ function _rxc_js_gfx_mode() {
   return 1;
 }
 
+var RXCG_T0 = performance.timeOrigin;
 function _rxc_js_gfx_submit(p, n, frameEnd) {
   p >>>= 0;
   /* heap > 2 GB: pointers arrive signed */ const b = HEAPU8.slice(p, p + n);
   RXCG.w.postMessage({
     cmds: b.buffer,
     seq: ++RXCG.seq,
-    t: performance.timeOrigin + performance.now()
+    t: RXCG_T0 + performance.now()
   }, [ b.buffer ]);
 }
 

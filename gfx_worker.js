@@ -3,6 +3,7 @@
 // {cmds: ArrayBuffer}. Out: {log}, {done: frame, q: occlusion results}, {rb: seq, addr, data}, {lost}, {fatal}.
 'use strict';
 let G = null, running = false, inPtr = 0, inCap = 0, lastSeq = 0;
+const T0 = performance.timeOrigin;
 const queue = [], st = { t0: performance.now(), busy: 0, lat: 0, nlat: 0 };   // st: share of wall time spent replaying (reported each second)
 const hop = (() => { const ch = new MessageChannel(); let q = []; ch.port1.onmessage = () => { const f = q; q = []; for (const g of f) g(); }; return f => { q.push(f); if (q.length === 1) ch.port2.postMessage(0); }; })();
 const fatal = err => { postMessage({ fatal: String((err && err.stack) || err) }); queue.length = 0; };
@@ -56,7 +57,7 @@ function pump() {
       const m = queue[0];
       if (m.cmds || m.pos !== undefined) {                    // (a buffer resumed after a yield has cmds = null)
         if (m.pos === undefined) {
-          if (m.t) { st.lat += performance.timeOrigin + performance.now() - m.t; st.nlat++; }
+          if (m.t) { st.lat += T0 + performance.now() - m.t; st.nlat++; }
           if (m.seq !== undefined) { if (m.seq !== lastSeq + 1) postMessage({ log: `[gfx worker] buffer ${m.seq} arrived after ${lastSeq}` }); lastSeq = m.seq; }
           const n = m.cmds.byteLength;
           if (n > inCap) { if (inPtr) G._free(inPtr); inCap = Math.max(n, inCap * 2, 1 << 20); inPtr = G._malloc(inCap) >>> 0; }
