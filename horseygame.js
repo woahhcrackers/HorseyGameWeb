@@ -6404,7 +6404,11 @@ function _rxc_js_gfx_mode() {
   const w = Module["gfxWorker"];
   if (!w) return 0;
   RXCG.w = w;
-  RXCG.fif = Math.max(1, +(new URLSearchParams(location.search).get("fif") || 1));
+  // default 2 frames in flight: with 1, the engine thread blocks until the gfx
+  // worker finishes every frame, so big area-load buffer uploads (hundreds of MB)
+  // stall the frame directly. 2 lets the engine run one frame ahead and smooths
+  // those hitches (override with ?fif=1)
+  RXCG.fif = Math.max(1, +(new URLSearchParams(location.search).get("fif") || 2));
   Module["__gfxmsg"] = RXCG.onmsg;
   const early = Module["__gfxEarly"] || [];
   Module["__gfxEarly"] = [];
