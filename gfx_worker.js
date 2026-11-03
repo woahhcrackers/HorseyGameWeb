@@ -56,7 +56,7 @@ function pump() {
       const m = queue[0];
       if (m.cmds || m.pos !== undefined) {                    // (a buffer resumed after a yield has cmds = null)
         if (m.pos === undefined) {
-          if (m.t) { st.lat += performance.timeOrigin + performance.now() - m.t; st.nlat++; }
+          if (m.t) { st.lat += T0 + performance.now() - m.t; st.nlat++; }
           if (m.seq !== undefined) { if (m.seq !== lastSeq + 1) postMessage({ log: `[gfx worker] buffer ${m.seq} arrived after ${lastSeq}` }); lastSeq = m.seq; }
           const n = m.cmds.byteLength;
           if (n > inCap) { if (inPtr) G._free(inPtr); inCap = Math.max(n, inCap * 2, 1 << 20); inPtr = G._malloc(inCap) >>> 0; }

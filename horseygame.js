@@ -6201,14 +6201,10 @@ function _rxc_js_file_read_nb(fd, bufp, off, n, donep, resultp) {
     HEAPU8.set(f.ov.data.subarray(off, end), bufp >>> 0);
     return end - off;
   }
-  const d = RXC.readRange(f.rel, off, n);
-  if (!(d instanceof Promise)) {
-    HEAPU8.set(d, bufp >>> 0);
-    return d.length;
-  }
-  d.then(data => {
-    HEAPU8.set(data, bufp >>> 0);
-    HEAP32[resultp >>> 2 >>> 0] = data.length;
+  const d = RXC.readRangeInto(f.rel, off, n, bufp >>> 0);
+  if (!(d instanceof Promise)) return d;
+  d.then(len => {
+    HEAP32[resultp >>> 2 >>> 0] = len;
     HEAP32[donep >>> 2 >>> 0] = 1;
   }, () => {
     HEAP32[resultp >>> 2 >>> 0] = -1;
@@ -6377,13 +6373,14 @@ function _rxc_js_gfx_mode() {
   return 1;
 }
 
+var RXCG_T0 = performance.timeOrigin;
 function _rxc_js_gfx_submit(p, n, frameEnd) {
   p >>>= 0;
   /* heap > 2 GB: pointers arrive signed */ const b = HEAPU8.slice(p, p + n);
   RXCG.w.postMessage({
     cmds: b.buffer,
     seq: ++RXCG.seq,
-    t: performance.timeOrigin + performance.now()
+    t: RXCG_T0 + performance.now()
   }, [ b.buffer ]);
 }
 
