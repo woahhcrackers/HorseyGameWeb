@@ -167,6 +167,15 @@ function preRun() {
     if (typeof preRun == "function") preRun = [ preRun ];
     onPreRuns.push(...preRun);
   }
+  // Grow the wasm heap BEFORE the guest reserves its own memory pool, so the pool
+  // is sized off a larger heap (?mem=<MB>, default 2048; the wasm allows up to 4 GB).
+  try {
+    var memMB = +(new URLSearchParams(location.search).get("mem")) || 2048;
+    var want = memMB * 1048576;
+    if (wasmMemory && wasmMemory.buffer.byteLength < want) growMemory(want);
+  } catch (e) {
+    console.warn("[web] pre-run heap grow failed", e);
+  }
   // Begin ATPRERUNS hooks
   callRuntimeCallbacks(onPreRuns);
 }
