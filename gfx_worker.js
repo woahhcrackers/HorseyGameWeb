@@ -3,6 +3,7 @@
 // {cmds: ArrayBuffer}. Out: {log}, {done: frame, q: occlusion results}, {rb: seq, addr, data}, {lost}, {fatal}.
 'use strict';
 let G = null, running = false, inPtr = 0, inCap = 0, lastSeq = 0;
+const T0 = performance.timeOrigin;
 const queue = [], st = { t0: performance.now(), busy: 0, lat: 0, nlat: 0 };   // st: share of wall time spent replaying (reported each second)
 const hop = (() => { const ch = new MessageChannel(); let q = []; ch.port1.onmessage = () => { const f = q; q = []; for (const g of f) g(); }; return f => { q.push(f); if (q.length === 1) ch.port2.postMessage(0); }; })();
 const fatal = err => { postMessage({ fatal: String((err && err.stack) || err) }); queue.length = 0; };
