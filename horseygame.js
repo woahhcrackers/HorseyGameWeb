@@ -6109,6 +6109,45 @@ var RXC = {
       RXC.tot.fetchMs += dt;
       return assemble(blks);
     });
+  },
+  // like readRange, but assembles straight into the guest heap at bufp — skips
+  // the intermediate Uint8Array allocation + full copy per multi-block read
+  readRangeInto(rel, off, n, bufp) {
+    const size = RXC.manifest[rel];
+    if (off >= size) return 0;
+    if (off + n > size) n = size - off;
+    const B = RXC.BLOCK, b0 = Math.floor(off / B), b1 = Math.floor((off + n - 1) / B);
+    const parts = [];
+    let pending = false;
+    for (let b = b0; b <= b1; b++) {
+      const v = RXC.fetchBlock(rel, b);
+      if (v instanceof Promise) pending = true;
+      parts.push(v);
+      RXC.note(rel, b);
+    }
+    const nBlocks = Math.ceil(size / B);
+    for (let b = b1 + 1; b <= Math.min(b1 + 2, nBlocks - 1); b++) {
+      RXC.note(rel, b);
+      RXC.fetchBlock(rel, b).catch(() => {});
+    }
+    const assemble = blks => {
+      let done = 0;
+      for (let i = 0; i < blks.length && done < n; i++) {
+        const s = i === 0 ? off - b0 * B : 0, take = Math.min(n - done, blks[i].length - s);
+        if (take <= 0) break;
+        HEAPU8.set(blks[i].subarray(s, s + take), bufp + done);
+        done += take;
+      }
+      return done;
+    };
+    if (!pending) return assemble(parts);
+    const tf = performance.now();
+    return Promise.all(parts).then(blks => {
+      const dt = performance.now() - tf;
+      RXC.cnt.fetchMs += dt;
+      RXC.tot.fetchMs += dt;
+      return assemble(blks);
+    });
   }
 };
 
